@@ -78,10 +78,9 @@ Phi_w = eval.basis(t, basis_w)
 model_spatial_functional="
 
 functions {
-  // Função Matérn 3/2
+  // Matern 3/2 Covariance Function
    matrix matern32_cov(matrix Full_D, real kappa2, real varphi) {
-    int M = dims(Full_D)[1];            // número de sítios (linhas de D)
-    matrix[M, M] cov;
+    int M = dims(Full_D)[1];            // Number of sites (rows of D)
     real c = sqrt(3.0) / varphi;
     
     for (i in 1:M) {
@@ -92,7 +91,7 @@ functions {
         } else {
           real h = Full_D[i, j] * c;
           cov[i, j] = kappa2 * (1 + h) * exp(-h);
-          cov[j, i] = cov[i, j]; // garantir simetria
+          cov[j, i] = cov[i, j]; // Ensure symmetry
         }
       }
     }
