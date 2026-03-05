@@ -54,6 +54,9 @@ Phi2 = eval.basis(times, basis_beta2)    # n x R matrix
 basis_w = create.bspline.basis(rangeval = c(0,1), nbasis = V, norder = 4)
 Phi_w = eval.basis(times, basis_w)       # n x V matrix
 
+d_lower = unname( quantile(D, probs = 0.05) )
+d_upper = unname( quantile(D, probs = 0.95) )
+
 #-------------------------------------------------------------------------------
 model_spatial_functional = "
 functions {
@@ -96,7 +99,7 @@ functions {
     vector[m_obs] C2_obs;     
     vector[m_new] C1_new;     
     vector[m_new] C2_new;     
-    matrix[m, m]  Full_D;     
+    matrix[m, m] D;     
     real d_lower;
     real d_upper;
     
@@ -128,7 +131,7 @@ functions {
     matrix[m, R] E;
   
     matrix[m, m] Cov_w;                           // Spatial covariance matrix
-    Cov_w = matern32_cov(Full_D, kappa2, varphi);
+    Cov_w = matern32_cov(D, kappa2, varphi);
     matrix[m, m] L = cholesky_decompose(Cov_w);   // Cholesky factor of Sigma
     E = L * z_E;
 
@@ -178,16 +181,6 @@ functions {
  
     to_vector(Y) ~ normal(to_vector(mu), sqrt(tau2));
   }
-
-    generated quantities {
-    matrix[m_new, n] Y_new;        // Predictive distribution for new locations
-   
-    for(i in 1:m_new){
-    for(l in 1:n){
-    Y_new[i,l]=normal_rng(mu_new[i,l], sqrt(tau2));
-   }
- }
-}
 "
 #-------------------------------------------------------------------------------
 
@@ -236,7 +229,7 @@ MonteCarlo = function(step){
     chains          = 2,
     parallel_chains = 2,
     iter_warmup     = 20000,
-    iter_sampling   = 10000,
+    iter_sampling   = 20000,
     thin            = 10
   )
   ##
@@ -286,4 +279,5 @@ sfLibrary(coda)
 sfExportAll()
 sfLapply(1:int, fun=MonteCarlo) # Function that I want to compute multiple times using sfLapply
 sfStop()
+
 
