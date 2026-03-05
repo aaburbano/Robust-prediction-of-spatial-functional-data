@@ -19,7 +19,7 @@ set.seed(12345)     # Seed for reproducibility
 # Assuming the script runs from the root of your project directory
 setwd("./Data")
 load("coords.RData")
-load("Sample_Yobs.RData")
+load("Y_obs.RData")
 load("t.RData")
 load("C1.RData")
 load("C2.RData")
@@ -57,7 +57,6 @@ Phi_w = eval.basis(times, basis_w)       # n x V matrix
 d_lower = unname( quantile(D, probs = 0.05) )
 d_upper = unname( quantile(D, probs = 0.95) )
 
-Y= t(Sample_Yobs)
 #-------------------------------------------------------------------------------
 model_spatial_functional = "
 functions {
@@ -280,6 +279,7 @@ sfLibrary(coda)
 sfExportAll()
 sfLapply(1:int, fun=MonteCarlo) # Function that I want to compute multiple times using sfLapply
 sfStop()
+
 
 
 
