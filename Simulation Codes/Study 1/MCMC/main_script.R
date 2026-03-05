@@ -57,21 +57,20 @@ Phi_w = eval.basis(times, basis_w)       # n x V matrix
 #-------------------------------------------------------------------------------
 model_spatial_functional = "
 functions {
-  // Matérn 3/2 Function
-  matrix matern32_cov(matrix D, real kappa2, real varphi) {
-    int M = dims(D)[1];            // number of sites (rows of D)
-    matrix[M, M] cov;
-    real sqrt3 = sqrt(3.0);
+  // Matern 3/2 Covariance Function
+   matrix matern32_cov(matrix Full_D, real kappa2, real varphi) {
+    int M = dims(Full_D)[1];            // Number of sites (rows of D)
+    real c = sqrt(3.0) / varphi;
     
     for (i in 1:M) {
       for (j in i:M) {
         if (i == j) {
-          // Diagonal: add a jitter to ensure positive-definiteness
+          // To ensure positive definiteness, we add a small amount of diagonal jitter.
           cov[i, j] = kappa2 + 1e-10;
         } else {
-          real h = D[i, j];
-          cov[i, j] = kappa2 * (1 + sqrt3 * h / varphi) * exp(-sqrt3 * h / varphi);
-          cov[j, i] = cov[i, j];   // ensure symmetry
+          real h = Full_D[i, j] * c;
+          cov[i, j] = kappa2 * (1 + h) * exp(-h);
+          cov[j, i] = cov[i, j]; // Ensure symmetry
         }
       }
     }
@@ -79,71 +78,115 @@ functions {
   }
 }
 
-data {
-  int<lower=1> m;            // number of locations 
-  int<lower=1> n;            // number of time points 
-  int<lower=1> G;            // number of B-spline bases for the q term 
-  int<lower=1> R;            // number of bases for beta1(t) and beta2(t)
-  int<lower=1> V;            // number of B-spline bases for the spatial term
-  
-  matrix[n, G] Phi0;         // intercept basis matrix
-  matrix[n, R] Phi1;         // basis matrix for Beta 1
-  matrix[n, R] Phi2;         // basis matrix for Beta 2 
-  matrix[n, V] Phi_w;        // temporal basis matrix for spatial effect
-  
-  vector[m] C1;              // first covariate (e.g., longitude)
-  vector[m] C2;              // second covariate (e.g., latitude)
-  matrix[m, m] D;            // Matrix of (Euclidean) distances between all pairs of sites [m x m]
-  
-  matrix[m, n] Y;            // simulated (observed) data
-}
-
-parameters {
-  vector[G] q;               // global coefficients
-  vector[R] z1;              // coefficients for spatial covariate p = 1
-  vector[R] z2;              // coefficients for spatial covariate p = 2 
-  matrix[m, V] z_E;          // each column ~ Normal(0, I_m)
-  
-  real<lower=0> kappa2;      // scale (variance) for the spatial effect
-  real<lower=0> varphi;      // range of the Matern
-  real<lower=0> sigma2_q;    // variance for q
-  real<lower=0> sigma2_z;    // variance for z1 and z2
-  real<lower=0> tau2;        // noise variance
-}
-  
-transformed parameters {
-  matrix[m, V] E;
-  matrix[m, m] Cov_w;                          // spatial covariance matrix
-  Cov_w = matern32_cov(D, kappa2, varphi);
-  matrix[m, m] L = cholesky_decompose(Cov_w);  // Cholesky factor of Sigma
-  E = L * z_E;
-}
-  
-model {
-  // ========== Priors ==========
-  
-  sigma2_q ~ inv_gamma(2,1.2);       // q ~ Normal(0, sigma2_q)
-  sigma2_z ~ inv_gamma(2,0.5);       // z1, z2 ~ Normal(0, sigma2_z)
-  tau2     ~ inv_gamma(2,0.5);   
-  kappa2   ~ inv_gamma(2,1);
-  varphi   ~ inv_gamma(2,1);
-  
-  q        ~ normal(0, sqrt(sigma2_q));
-  z1       ~ normal(0, sqrt(sigma2_z));
-  z2       ~ normal(0, sqrt(sigma2_z));
-  
-  to_vector(z_E) ~ normal(0, 1);  // Non-centered prior for z_E
-
-  // ========== Likelihood ==========
- 
-  for (j in 1:m) {
-    vector[n] mu_j;
-    mu_j = Phi0  * q
-         + C1[j] * (Phi1 * z1)
-         + C2[j] * (Phi2 * z2)
-         + Phi_w * E[j]';         // now E[j]' has dimension V x 1
-    Y[j] ~ normal(mu_j, sqrt(tau2)); // broadcasting in n dimensions
+  data {
+    int<lower=1> m_obs;      
+    int<lower=1> m_new;       
+    int<lower=1> m;            
+    int<lower=1> n;           
+    int<lower=1> A;           
+    int<lower=1> G;           
+    int<lower=1> R;           
+    
+    matrix[n, A] Phi0;        
+    matrix[n, G] Phi1;        
+    matrix[n, G] Phi2;        
+    matrix[n, R] Phi_w;       
+    
+    vector[m_obs] C1_obs;     
+    vector[m_obs] C2_obs;     
+    vector[m_new] C1_new;     
+    vector[m_new] C2_new;     
+    matrix[m, m]  Full_D;     
+    real d_lower;
+    real d_upper;
+    
+    matrix[m_obs, n] Y;                       // simulated data (observed)      
+    
   }
+
+    parameters {
+    vector[A] q_raw;                           // Global coefficients (raw)
+    vector[G] z1_raw;                          // Coefficients for spatial covariate p=1 (raw)
+    vector[G] z2_raw;                          // Coefficients for spatial covariate p=2 (raw) 
+    matrix[m, R] z_E;                          // Latent variable ~ Normal(0, I_m)
+  
+    real<lower=1e-6> kappa2;                   // Scale parameter (variance) for the spatial effect
+    real<lower=d_lower, upper=d_upper> varphi; // Range parameter for Matern
+    real<lower=1e-6> sigma2_q;                 // Variance for q
+    real<lower=1e-6> sigma2_z1;                // Variance for z1 
+    real<lower=1e-6> sigma2_z2;                // Variance for z2
+    real mu_q;                                 // Mean for q
+    real mu_z1;                                // Mean for z1 
+    real mu_z2;                                // Mean for z2 
+    real<lower=1e-6> tau2;                     // Noise variance (nugget)
+}
+  
+    transformed parameters {
+    vector[A] q;                                  
+    vector[G] z1;                             
+    vector[G] z2;
+    matrix[m, R] E;
+  
+    matrix[m, m] Cov_w;                           // Spatial covariance matrix
+    Cov_w = matern32_cov(Full_D, kappa2, varphi);
+    matrix[m, m] L = cholesky_decompose(Cov_w);   // Cholesky factor of Sigma
+    E = L * z_E;
+
+    // Non-centered parameterization reconstruction 
+    q  = rep_vector(mu_q,A) + sqrt(sigma2_q) * q_raw;
+    z1 = rep_vector(mu_z1,G)+ sqrt(sigma2_z1)* z1_raw;
+    z2 = rep_vector(mu_z2,G)+ sqrt(sigma2_z2)* z2_raw;
+    E  = L * z_E;
+
+    // Mean function construction for observed locations
+    matrix[m_obs, n] mu;
+    mu = rep_matrix((Phi0 * q)', m_obs)
+     + C1_obs * (Phi1 * z1)'
+     + C2_obs * (Phi2 * z2)'
+     + E[1:m_obs,] * Phi_w';
+
+    // Mean function construction for new (unobserved) locations  
+    matrix[m_new, n] mu_new;
+    mu_new = rep_matrix((Phi0 * q)', m_new)
+     + C1_new * (Phi1 * z1)'
+     + C2_new * (Phi2 * z2)'
+     + E[(m_obs+1):m,] * Phi_w';
+  
+  }
+  
+    model {
+    // ========== Priors ==========
+  
+    sigma2_q  ~ inv_gamma(2,1.2);         // q  ~ Normal(0, sigma2_q)
+    sigma2_z1 ~ inv_gamma(2,0.5);         // z1 ~ Normal(0, sigma2_z1)
+    sigma2_z2 ~ inv_gamma(2,0.5);         // z2 ~ Normal(0, sigma2_z2)
+    mu_q      ~  normal(0,100);
+    mu_z1     ~  normal(0,100);
+    mu_z2     ~  normal(0,100);
+  
+    kappa2    ~ inv_gamma(2,1);
+    varphi    ~ uniform(d_lower,d_upper);
+    tau2      ~ inv_gamma(2,0.5); 
+
+    q_raw  ~ std_normal();
+    z1_raw ~ std_normal();
+    z2_raw ~ std_normal();
+  
+    to_vector(z_E) ~ std_normal();  // Priori “não-centralizada” para z_E
+
+    // ========== Verossimilhança ==========
+ 
+    to_vector(Y) ~ normal(to_vector(mu), sqrt(tau2));
+  }
+
+    generated quantities {
+    matrix[m_new, n] Y_new;        // Predictive distribution for new locations
+   
+    for(i in 1:m_new){
+    for(l in 1:n){
+    Y_new[i,l]=normal_rng(mu_new[i,l], sqrt(tau2));
+   }
+ }
 }
 "
 #-------------------------------------------------------------------------------
@@ -243,3 +286,4 @@ sfLibrary(coda)
 sfExportAll()
 sfLapply(1:int, fun=MonteCarlo) # Function that I want to compute multiple times using sfLapply
 sfStop()
+
